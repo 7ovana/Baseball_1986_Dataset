@@ -1,0 +1,516 @@
+---
+title: "Analyse de données: Projet final, données BASEBALL"
+author: "Prédive GOPINATHAN & Jovana KRSTEVSKA"
+date: "1/12/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE, echo = FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(tidyverse)
+library(plotly)
+library(lubridate)
+library(heatmaply)
+library(ggcorrplot)
+library(ggbiplot)
+library(rcompanion)
+
+
+
+# Colour palette
+mypalette <- c('#d32d54', '#34dbca', '#f5ae1d', '#7b60f1', '#f3842f', '#4fafe8', '#dd86d8',  '#76df3a' )
+
+data <-read.csv(file="Baseball.csv",sep=";")
+# Creating subset of samples without salary entry
+pred_set <- subset(data, is.na(data$Salary_1987))
+data <- subset(data, !is.na(data$Salary_1987))
+```
+
+## Introduction
+
+Le baseball est un sport collectif. Il se joue avec une batte pour frapper une balle lancée et des gants pour rattraper la balle. Au baseball, un **frappeur**(hitter) ou batteur est un joueur dont le rôle est de frapper la balle avec sa batte. Pour ce projet nous travaillons avec des données sur les salaires de 1987 des **frappeurs** (hitters) obtenues par l'édition du 20 Avril, 1987 de *Sports Illustrated*, enrichies par des données sur toutes leurs carrières et également performances de 1986 venant de *1987 Baseball Encyclopedia Update*.
+Nous avons également, les compositions des teams de 1986, grâce à *Elias Sports Bureau*.
+
+Tout d'abord, nous devons nous familiariser avec ces données. Regardons les positions possibles pour un joueur de baseball.
+
+```{r positions, fig.cap="Baseball players position", out.width = '70%'}
+knitr::include_graphics("Baseball_positions.svg.png")
+```
+
+Dans notre base de données nous n'avons que des observations concernant les **frappeurs** (hitters). plus précisément, nous avons **263** observations.
+Voici une brève description des quelques positions :
+
+* **Lanceur (Pitcher)** : le lanceur doit analyser chaque frappeur, choisir quels lancers utiliser en fonctions des qualités et défauts de son adversaire. 
+
+* **Receveur (Catcher)** : le rôle est primordial lors des phases défensives. Positionné face au lanceur et derrière le batteur, il est le seul joueur de champ à pouvoir interagir à la fois avec le lanceur et avec les joueurs de champ.
+
+* **Première Base (First Base)** : a mission est d’empêcher le batteur d’atteindre le premier but, ou il est positionné. 
+
+* **Deuxième base** : les joueurs de deuxième base doivent attraper la balle et la lancer en première base pour enregistrer des retraits. Le joueur lui-même enregistre une assistance. Il est aussi chargé de commencer et de compléter des doubles jeux.
+
+* **Troisième base** : Les joueurs de troisième base sont habituellement des droitiers. Ils sont chargés d'attraper la balle et la lancer en première base, et aussi d'attraper la balle frappée en l'air.
+
+* **Arrêt-court (Shortstop)** : les arrêts-courts jouent la même position que les joueurs de deuxième base, la seule différence étant qu'ils sont plus loin de la première base, et doivent donc la lancer avec plus de force
+Dans la base de données originale, il y avait plein d'erreurs qui étaient corrigées ensuite. Nous disposons de la version corrigée. Voici un petit aperçu de nos données: 
+
+```{r}
+str(data)
+```
+
+On voit que nous avons deux ligues, la **ligue A (Américaine)** et la **ligue N (Nationale)** qui ont deux divisions chacune, **Ouest (W)** et **Est (E)**.
+
+Notre but c'est d'étudier si les baseballeurs sont convenablement payés selon leur performance, d'un coté de l'année dernière mais aussi de toute leure carrière. La variable à expliquer est donc **le salaire des baseballeurs en 1987**, ici appelée **Salary_1987**. Voici un petit récapitulatif de cette variable:
+
+```{r}
+summary(data$Salary_1987)
+```
+
+Voici un histogramme du salaire: 
+
+```{r, mesage = FALSE, warning=FALSE}
+# Histogram of target
+fig <- plot_ly(data,
+               x = ~Salary_1987, 
+               type = 'histogram',
+               marker = list(color = mypalette[2]),
+               nbinsx = 100) %>% 
+  layout(bargap = 0.1, title = "Salary")
+
+fig
+```
+
+Pour essayer de rendre la cible plus symétrique, on va essayer de prédire plutôt **log(Salary_1987)**. Voici un petit résumé sur cette version de la cible, et l'histogramme correspondant.
+
+```{r}
+y <- log(data$Salary_1987)
+summary(y)
+```
+
+
+```{r, message = FALSE, warning=FALSE}
+# Histogram of target
+fig <- plot_ly(x = y, 
+               type = 'histogram',
+               marker = list(color = mypalette[2]),
+               nbinsx = 100) %>% 
+  layout(bargap = 0.1, title = "Salary")
+
+fig
+```
+
+On voit bien que les valeurs sont plus symétriquement distribuées, ainsi on évitera d'avoir des modèles instables.
+
+Pour bien voir le lien entre la performance des joueurs et leur salaire, intuitivement la durée de leur carrière est très importante. Une première remarque qu'on peut faire est que le salaire n'est pas linéairement explicable par les années d'activités, ce qui peut paraître contre-intuitif. Ceci n'exclut pas la possibilité que ces deux variables sont non-linéairement dépendants. 
+
+```{r}
+# Log salary not linear with years of career
+fig <- plot_ly(data, y = y,
+               x = ~Longevity,
+               type = 'scatter',
+               mode = 'markers',
+               marker = list(color = mypalette[1]),
+               name = "Log(salary) in function of years of career") %>% 
+  layout(yaxis = list(name = "log(salary)"))
+fig
+```
+
+Vérifions les corrélations entre les variables dont on dispose:
+
+### Correlation entre les variables et le target 
+
+```{r, warning=FALSE, out.width= '80%', out.height= '17cm'}
+# Target and features separation
+X <- subset(data, select = -c(Name, Salary_1987, League_1987, Team_1987))
+
+# Encode categorical variables
+X$League_1986 <- factor(data$League_1986, 
+                          levels = data$League_1986 %>% unique %>% levels, 
+                          labels = seq(1, data$League_1986 %>% unique %>% length, 1)) %>% as.numeric
+X$Division_1986 <- factor(data$Division_1986, 
+                          levels = data$Division_1986 %>% unique %>% levels, 
+                          labels = seq(1, data$Division_1986 %>% unique %>% length, 1)) %>% as.numeric
+X$Team_1986 <-  factor(data$Team_1986, 
+                       levels = data$Team_1986 %>% unique %>% levels, 
+                       labels = seq(1, data$Team_1986 %>% unique %>% length, 1)) %>% as.numeric
+X$Position_1986 <- factor(data$Position_1986,
+                          levels = data$Position_1986 %>% unique,
+                          labels = seq(1, data$Position_1986 %>% unique %>% length,1)) %>% as.numeric
+
+X_with_target <- X
+X_with_target['Salary_1987'] = y
+# Correlation entre les features + target
+
+# Compute a correlation matrix
+corr <- round(cor(X_with_target), 2)
+
+# Compute a matrix of correlation p-values
+p.mat <- cor_pmat(X_with_target)
+
+# Visualize the lower triangle of the correlation matrix
+# Barring the no significant coefficient
+corr.plot <- ggcorrplot(
+  corr, hc.order = TRUE, type = "lower", outline.col = "white",
+  p.mat = p.mat)
+ggplotly(corr.plot)
+```
+
+Nous remarquons que beaucoup de variables sont très fortement corrélées entre elles. 
+Ceci nous permettra de réduire le nombre de variables importantes dans la modélisation. Voici une comparaison: **Hits_career** vs. **Bat_times_career** et les mêmes pour l'année 1986: **Hits_86** vs. **Bat_times_86**.
+
+```{r, warning=FALSE, out.width='100%'}
+# Hits_career vs. Bat_times_career
+fig1 <- plot_ly(data, y = ~Bat_times_career,
+               x = ~Hits_career,
+               type = 'scatter',
+               mode = 'markers',
+               marker = list(color = mypalette[1]),
+               name = "Hits_career in function of Bat_times_career") %>% 
+  layout(yaxis = list(name = "Hits_career"))
+
+fig2 <- plot_ly(data, y = ~Bat_times_86,
+               x = ~Hits_86,
+               type = 'scatter',
+               mode = 'markers',
+               marker = list(color = mypalette[1]),
+               name = "Hits_86 in function of Bat_times_86") %>% 
+  layout(yaxis = list(name = "Hits_86"))
+
+fig <- subplot(fig1, fig2)
+fig
+```
+
+Nous décidons arbitrairement d'en garder que **Hits_career** et **Hits_86**. 
+Donc, on enlève les colonnes **Bat_times_career** et **Bat_times_86**. 
+
+```{r}
+# On utilise que Hits_career et Hits_86
+X = subset(X, select = -c(Bat_times_career, Bat_times_86))
+```
+
+Un expert du baseball, **Earnshaw Cook** avait suggéré de considérer une variable que l'on notera **Total Runs Produced (TPR)**, qui donne le nombre total de runs produits par les joueurs, divisé par le nombre d'année de leur activité sportive de haut niveau. Techniquement, ce que l'on obtient c'est une moyenne de runs qu'un joueur a fait par an. On obtient cette variable par la formule suivante: 
+
+$$ TPR = (runs + runs\_batted\_in - home\_runs) / years $$
+Cette nouvelle variable nous permet de nous libérer de 6 variables, et d'en ajouter 2 nouvelles, donc de diminuer le nombre de features de 4. 
+
+```{r}
+# Total runs produced
+TRP_career <- (X$Runs_career + X$Runs_batted_career - X$Home_runs_career) / X$Longevity
+TRP_1986 <- (X$Runs_1986 + X$Runs_batted_1986 - X$Home_runs_1986)
+X = subset(X, select = -c(Runs_career, Runs_batted_career, Home_runs_career, Runs_1986, Runs_batted_1986, Home_runs_1986))
+X['TRP_career'] = TRP_career
+X['TRP_1986'] = TRP_1986
+```
+
+Voici la nouvelle matrice de correlation. 
+
+```{r, warning=FALSE}
+X_with_target <- X
+X_with_target['logSalary_1987'] = y
+
+# Correlation entre les features + target
+
+# Compute a correlation matrix
+corr <- round(cor(X_with_target), 2)
+# Compute a matrix of correlation p-values
+p.mat <- cor_pmat(X_with_target)
+# Visualize the lower triangle of the correlation matrix
+# Barring the no significant coefficient
+corr.plot <- ggcorrplot(
+  corr, hc.order = TRUE, type = "lower", outline.col = "white",
+  p.mat = p.mat
+)
+ggplotly(corr.plot)
+```
+
+Nous remarquons une correlation forte entre **Hits_86** et **TRP_1986**, ce qui est logique, en considérant le calcul de **TRP**.
+
+```{r, out.width='100%'}
+# TRP_1986 vs. Hits_1986
+fig1 <- plot_ly(data, y = ~Hits_86,
+                x = ~TRP_1986,
+                type = 'scatter',
+                mode = 'markers',
+                marker = list(color = mypalette[1]),
+                name = "Hits_86 in function of TRP_1986") %>% 
+  layout(yaxis = list(name = "TRP_1986")) 
+fig2 <- plot_ly(data, y = ~Hits_career,
+                x = ~Longevity,
+                type = 'scatter',
+                mode = 'markers',
+                marker = list(color = mypalette[1]),
+                name = "Hits_career in function of Longevity") %>% 
+  layout(yaxis = list(name = "Longevity")) 
+fig <- subplot(fig1, fig2)
+fig
+```
+
+On enlève la variable **Hits_86** et la variable **Hits_Career**. 
+
+```{r}
+X = subset(X, select = -c(Hits_86, Hits_career))
+```
+
+On continue à travailler avec ces variables-là:
+
+```{r}
+colnames(X)
+```
+
+## Variables categorielles
+
+Les vairables categorielles dans notre jeu de données sont: 
+
+* League_1986 (A ou N)
+* Division_1986 (E ou W)
+* Teal_1986 (il y en a 25 au total)
+* Position_1986
+
+Regardons comment les salaires sont distribués selon l'équipe dans laquelle ils appartiennent.
+
+```{r}
+boxplot(Salary_1987~Team_1986, data, xlab = 'Team_1986')
+```
+
+Regardons comment sont distribués les salaires des baseballeurs selon la **Division** et la **Ligue** dans laquelle ils appartiennent.
+
+```{r}
+fig1 <- plot_ly(data, y = ~Salary_1987, color = ~Division_1986, type = "box",
+               colors = mypalette[1:2])
+fig2 <- plot_ly(data, y = ~Salary_1987, color = ~League_1986, type = "box",
+                colors = mypalette[3:4])
+subplot(fig1, fig2)
+```
+
+Ensuite, nous allons étudier l'impact de ces deux variables sur le salaire.
+
+```{r}
+boxplot(Salary_1987~League_1986*Division_1986, data = data, xlab='League/Division')
+```
+
+On constate que la distribution des salaires en fonction des leagues et des divisions n'est pas la même : ces deux facteurs semblent donc impacter le salaire des joueurs.  
+Pour le vérifier, on va réaliser une **anova à deux facteurs**.
+
+```{r}
+moda2 <- lm(Salary_1987~League_1986*Division_1986, data = data)
+summary(moda2)
+```
+
+La p-valeur du test associé à la league est très élevée. Cependant on ne peut pas rejeter immédiatement l'hypothèse selon laquelle l'interraction league/division influe sur le salaire. Vérifions le avec le tableau d'anova :  
+
+```{r}
+anova(moda2)
+```
+
+La p-valeur de l'interraction est de 0.9, on rejette donc l'hypothèse nulle au niveau 10% mais pas au niveau 5%.
+
+Vérifions maintenant l'hyphotèse de normalité des résidus :
+
+```{r}
+n <- nrow(data)
+resa2 <- rstudent(moda2)
+df <- data.frame(index=1:n,resa2= resa2)
+
+quant.t <- qt((1:n)/n,n-3)
+plot(quant.t, sort(resa2), xlab = 'Student T(n-p-1)',
+     ylab = 'Quantiles empiriques des résidus', main = 'QQ-plot des résidus')
+abline(0, 1, col ='blue')
+```
+
+Les résidus ne s'alignent pas correctement sur la première bissectrice, il est possible que ce soit du à des salaires très élevés (ceux des stars de la league) ou très bas, en effet rien ne dit que le niveau est homogène et les salaires dépendent principalement du niveau des joueurs.
+Pour vérifier cela on pourrait par exemple examiner les valeurs aberrantes.
+On ne peut cependant pas rejeter notre modèle pour autant sans faire une étude plus approfondie.
+
+
+## Analyse des composantes principales (ACP)
+
+Cette méthode d'analyse des données (et de réduction de dimensionnalité) s'appelle également **décomposition orthogonale aux valeurs propres** ou **POD** (anglais : proper orthogonal decomposition). Elle consiste à transformer des variables liées entre elles (dites « corrélées » en statistique) en nouvelles variables décorrélées les unes des autres. Ces nouvelles variables sont nommées **composantes principales**, ou **axes principaux**. 
+
+En pratique, l'analyse des composantes principale nous aide à diminuer le nombre de variables utilisées dans un modèle, et rendre l'information moins redondante.
+Mais elle peut aussi être utilisée pour nous indiquer les variables les plus importantes pour décrire toute (ou quasiment toute) la variance décrite par toutes les variables. Autrement dit, à quelles variables du jeu de données initial peut-on nous restreindre pour expliquer une bonne partie de la totalité d'information disponible.
+
+L'ACP n'étant pas très stable pour les données categorielles, on les exclut temporairement. On travaille donc, avec les variables suivantes:
+
+```{r}
+X_nocat <- subset(X, select = -c(League_1986, Division_1986, Team_1986, Position_1986))
+colnames(X_nocat)
+```
+
+Et voici un plot de notre ACP, les deux premières composantes principales: 
+
+```{r}
+X.pca <- prcomp(X_nocat, center = TRUE,scale. = TRUE)
+summary(X.pca)
+ggplotly(ggbiplot(X.pca))
+```
+
+Nous pouvons remarquer que 60.9% de la variance est expliquée par seulement les deux premières composantes principales.
+Regardons ces vecteurs de près: 
+
+```{r}
+X.pca$rotation[,1:2]
+```
+Les composantes principales sont constituées des valeurs propres de l'orthogonalisation. Le plus la valeur propre est grande pour une variable de départ, le plus elle est importante dans l'explication d'information. 
+
+Nous remarquons que la valeur propre la plus grande pour la première composante principale est celle correspondant à **TRP_career**. Ceci n'est pas du tout étonnant, vu que le nombre de runs qu'un joeur à fait au cours de sa carrière joue intuitivement un grand rôle dans le salaire qui gagne. 
+
+La valeur propre la plus grande pour la deuxième composante principale est celle qui correspond à **Errors_1986**.
+
+Regardons la troisième et la quatrième composante principale:
+
+```{r}
+ggplotly(ggbiplot(X.pca, choice = c(3,4)))
+```
+
+Ces résultats ne sont pas très significatifs, car ces deux composantes principales expliquent seulement 25.9% de la variance.
+Donc, au total, juste avec les 4 premières composantes principales nous expliquons **86.8%** de la variance totale. Et voici les vecteurs correspondants à la troisième et la quatrième composante principale. 
+
+```{r}
+# eigenvectors
+X.pca$rotation[,3:4]
+```
+
+La valeur propre la plus grande pour la troisième variable et quatrième variable est **Put_outs_1986**.
+
+Cependant, ces résultats ne sont pas vraiment utiles pour comprendre l'impact de ces variables sur la cible. 
+Pour cela on peut avoir recours à d'autres méthodes. 
+
+## Analyse descendante de l'importance des variables
+
+Essayons d'estimer les variables les plus importantes pour la cible - le salaire des baseballeurs en 1987, en effectuant une analyse **descendante** sur une **regression linéaire multiple** (backward feature importance analysis). 
+
+C'est-à-dire, on va modéliser le problème en utilisant toutes les variables disponibles, et ensuite, on enlèvera celle qui présente la p-value la plus grande, donc, celle qui a été le moins utile pour décrire la cible.
+
+Nous commençons par utiliser toutes les variables: 
+
+```{r}
+X_back <- X
+mod <- lm(y ~ ., X_back)
+summary(mod)
+```
+
+Nous observons que la p-value la plus grande (0.479328) est obtenue pour la variable **Team_1986**. Donc, on l'enlève pour notre modèle suivant.
+
+```{r}
+X_back <- subset(X_back, select = -c(Team_1986))
+mod <- lm(y ~ ., X_back)
+summary(mod)
+```
+
+Ensuite, on enlève la variable **Put_outs_1986**, car sa p-valeur est la plus grande: 0.372740. 
+
+```{r}
+X_back <- subset(X_back, select = -c(Put_outs_1986))
+mod <- lm(y ~ ., X_back)
+summary(mod)
+```
+
+Et puis on enlève **Assists_1986**, et ainsi de suite. A la fin, on obtient un classement des variables par rapport à leur importance dans la détermination de la cible pour un modèle de regression linéaire multiple. 
+
+1. **TRP_career**
+2. **Longevity**
+3. **Walks_1986**
+4. **Walks_career**
+5. **Division_1986**
+
+## Modèles de regression linéaire multiple 
+
+Résumons quelques remarques essentielles qu'on a pu faire tout au long de notre analyse:
+
+
+* La modélisation du problème par un modèle de regression linéaire multiple en utilisant seulement les variables initiales dont on dispose ne donne pas des résultats très satisfaisants, comme on l'avait vu par le score  *$R^2$ dans l'analyse descendante.
+
+* Le salaire des joeurs de baseball a forcément un lien avec les années d'activité du joeur, et ce lien est juste "partiellement" linéaire.
+
+* La variable **TRP_career** est très importante pour l'explication de la cible (vu dans l'analyse descendante), et en général elle joue un grand rôle dans la quantité d'information totale (vu dans la partie ACP)
+
+* Pour qu'un modèle linéaire soit assez stable pour les prédictions des salaires de l'année 1987, il faut y inclure une variable de performance de l'année 1986. 
+
+En vue de la première remarque, on essayera de créer un modèle de regression linéaire multiple avec un nombre de features pas plus grand que 5.
+
+En vue de la deuxième remarque, en plus de la variable **Longevity**, on va considérer son carré et son cube. C'est-à-dire:
+
+$$ \text{Longevity_squared} = \text{Longevity}^2 \\
+  \text{Longevity_cubic} = \text{Longevity}^3$$
+
+En vue de la troisième remarque, on va inclure **TRP_career** dans notre modèle.
+
+Et finalement, en vue de la dernière remarque, on chosit la variable **Walks_1986**, comme une variable de performance des joueurs de l'année 1986.
+
+Essayons donc un modèle de regression linéaire multiple qui utlise: **Longevity**, **Longevity_squared**, **Longevity_cubic**, **TRP_career** et **Walks_1986**. Voici ce que l'on obtient:
+
+```{r}
+# Four predictors
+X_4 <- subset(X, select = c(Longevity, TRP_career, Walks_1986))
+X_4['years_squared'] = X$Longevity^2
+X_4['years_cubic'] = X$Longevity^3
+set.seed(1)
+split_dummy <- sample(c(rep(0, 0.7 * nrow(data)),  # Create dummy for splitting
+                        rep(1, 0.3 * nrow(data))))
+
+X_train <- X_4[split_dummy == 0, ]
+y_train <- y[split_dummy == 0]
+X_test <- X_4[split_dummy == 1, ]
+y_test <- y[split_dummy == 1]
+
+mod <- lm(y_train ~ ., X_train)
+summary(mod)
+```
+
+Nous séparons le jeu de données que nous avons en **train** (70% des observations) et **test** (30% des observations). Les observations dans chaque ensemble sont aléatoirement choisies, en respectant les tailles mentionnées entre parenthèses.  
+
+```{r}
+y_pred <- predict(mod, X_test)
+```
+
+```{r}
+plotNormalHistogram(y_test - y_pred, breaks = 15)
+```
+On voit que les résidus sont bien distribuées selon une loi normale, on le vérifie grace aux graphiques suivants:
+
+```{r}
+qqnorm(y_test - y_pred)
+qqline(y_test - y_pred)
+```
+
+Et voici la Root Mean Squared Error sur le test set:
+
+```{r}
+results <- data.frame(real_values = exp(y_test), predictions = exp(y_pred))
+rmse_test <- sqrt(mean((exp(y_test) - exp(y_pred))^2))
+print('RMSE on test set:')
+rmse_test
+```
+Voici les résidus en fonction des prédictions:
+
+```{r}
+fig <- plot_ly(y = y_test - y_pred,
+               x = y_pred,
+               type = 'scatter',
+               mode = 'markers',
+               marker = list(color = mypalette[1]),
+               name = "Log(salary) in function of years of career") %>% 
+  layout(yaxis = list(name = "log(salary)"))
+fig
+```
+
+Nous observons un assez grand écart pour certaines valeurs, ce qui est indicateur des valeurs aberrantes dans le jeu de données, nous devons les enlever ou les corriger pour avoir un modèle plus robuste et précis.
+
+En revanche, nous observons une bonne tendance linéaire lorsqu'on affiche les predictions en fonction des vraies valeurs pour le salaire dans le test set:
+
+```{r}
+fig <- plot_ly(y = y_pred,
+               x = y_test,
+               type = 'scatter',
+               mode = 'markers',
+               marker = list(color = mypalette[1]),
+               name = "Log(salary) in function of years of career") %>% 
+  layout(yaxis = list(name = "log(salary)"))
+fig
+```
+
+## Conclusion
+
+Nous pouvons affirmer que les salaires des joueurs sont bien expliqués par leur performance tout au long de leur carrière et de la performance de l'année d'avant. Cependant, les modèles que nous avons utilisé sont très sensibles aux valeurs aberrantes et une étude plus approfondie (de préférance en collaboration avec des experts de baseball) est demandée afin de produire des modèles plus stables et robustes.
+
+Comme le lien entre les variables et la cible n'est pas forcément linéaire, un modèle non-linéaire serait plus convenable. Même des simples modèles de machine learning (comme **Random Forest**, **Gradient Boosting**) donnent des résultats bien meilleurs qu'une regression linéaire multiple, malgrè le bon choix des variables. 
+
